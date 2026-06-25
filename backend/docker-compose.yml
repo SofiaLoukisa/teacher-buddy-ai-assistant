@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: teacherbuddy-postgres
+    environment:
+      POSTGRES_USER: teacherbuddy
+      POSTGRES_PASSWORD: teacherbuddy123
+      POSTGRES_DB: teacherbuddy
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teacherbuddy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    ports:
+      - "12434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+  api:
+    build: ./api
+    container_name: teacherbuddy-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    ports:
+      - "5001:5000"
+    environment:
+      DATABASE_URL: postgresql://teacherbuddy:teacherbuddy123@postgres:5432/teacherbuddy
+      OLLAMA_URL: http://ollama:11434/api/generate
+      OLLAMA_MODEL: llama3
+      SECRET_KEY: your-secret-key-change-in-production
+      JWT_SECRET_KEY: your-jwt-secret-key-change-in-production
+    restart: unless-stopped
+
+  streamlit:
+    build: ./app
+    container_name: streamlit
+    depends_on:
+      - ollama
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  ollama:
+    external: true
+  postgres_data:

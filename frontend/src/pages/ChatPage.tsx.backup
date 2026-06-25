@@ -1,0 +1,423 @@
+import { useState, FormEvent, useEffect } from 'react';
+import { chatAPI, Message as APIMessage, ChatSession } from '../services/api';
+import { ToastStack, useToasts } from '../components/Toast';
+
+type Message = { from: 'user' | 'assistant'; text: string };
+
+const quickActions = [
+  { title: "Create Quiz", desc: "Generate assessment questions", prompt: "Create a 10-question quiz on fractions with answers." },
+  { title: "Grade Assignment", desc: "Analyze and evaluate student work", prompt: "Help me grade these fraction assignments with a rubric." },
+  { title: "Generate Rubric", desc: "Create assessment criteria", prompt: "Draft a rubric for evaluating fraction skills." },
+  { title: "Learning Objectives", desc: "Define educational outcomes", prompt: "List learning objectives for teaching fractions." },
+  { title: "Lesson Plan", desc: "Structure a complete lesson", prompt: "Build a lesson plan for fractions for 5th graders." },
+  { title: "Differentiation Ideas", desc: "Adapt for diverse learners", prompt: "Give differentiation ideas for teaching fractions." },
+];
+
+const panelContent: Record<string, string> = {
+  'Lesson Plans': 'Browse or create lesson plans aligned to your curriculum. Add objectives, materials, and differentiation strategies.',
+  'Schedule': 'View and adjust your teaching schedule, upcoming classes, and important milestones.',
+  'Classes': 'Manage classes, rosters, and pacing guides for each group of learners.',
+  'Assignments': 'Create, distribute, and review assignments with clear rubrics.',
+  'Calendar': 'Track important dates, assessments, and school events in one place.',
+  'Resources': 'Organize readings, links, and media to share with students.',
+};
+
+const ChatPage = () => {
+  const { toasts, push, remove } = useToasts();
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [draft, setDraft] = useState('');
+  const [panel, setPanel] = useState<string>('Lesson Plans');
+  const [modal, setModal] = useState<string | null>(null);
+  const [events, setEvents] = useState<{ date: string; title: string }[]>([]);
+  const [eventDraft, setEventDraft] = useState<{ date: string; title: string }>({ date: '', title: '' });
+  const [currentSessionId, setCurrentSessionId] = useState<number | undefined>(undefined);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+
+  // Load chat sessions on mount
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  const loadSessions = async () => {
+    try {
+      const response = await chatAPI.getSessions();
+      setSessions(response.sessions);
+    } catch (error) {
+      console.error('Failed to load sessions:', error);
+    }
+  };
+
+  const loadSession = async (sessionId: number) => {
+    try {
+      setLoading(true);
+      const response = await chatAPI.getSessionHistory(sessionId);
+      setMessages(
+        response.messages.map((msg) => ({
+          from: msg.role as 'user' | 'assistant',
+          text: msg.content,
+        }))
+      );
+      setCurrentSessionId(sessionId);
+    } catch (error: any) {
+      push(error.response?.data?.error || 'Failed to load chat history', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const send = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+
+    // Add user message immediately
+    const userMessage: Message = { from: 'user', text: trimmed };
+    setMessages((prev) => [...prev, userMessage]);
+    setDraft('');
+    setSending(true);
+
+    try {
+      const response = await chatAPI.sendMessage(trimmed, currentSessionId);
+      
+      // Update session ID if it's a new chat
+      if (!currentSessionId) {
+        setCurrentSessionId(response.session_id);
+        loadSessions(); // Refresh session list
+      }
+
+      // Add AI response
+      const aiMessage: Message = { from: 'assistant', text: response.ai_message.content };
+      setMessages((prev) => [...prev, aiMessage]);
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.error || 'Failed to send message. Please try again.';
+      push(errorMessage, 'error');
+      
+      // Remove the user message on error
+      setMessages((prev) => prev.slice(0, -1));
+      setDraft(trimmed); // Restore the draft
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    send(draft);
+  };
+
+  const openModal = (name: string) => {
+    setPanel(name);
+    setModal(name);
+  };
+
+  const addEvent = () => {
+    if (!eventDraft.date || !eventDraft.title.trim()) return;
+    setEvents((prev) => [...prev, { ...eventDraft }]);
+    setEventDraft({ date: '', title: '' });
+  };
+
+  const startNewChat = () => {
+    setMessages([]);
+    setCurrentSessionId(undefined);
+  };
+
+  return (
+    <section className="section chat-page" style={{ maxWidth: '100%' }}>
+      <div className="chat-layout">
+        <aside className="sidebar">
+          <button 
+            onClick={startNewChat}
+            className="btn primary"
+            style={{ width: '100%', marginBottom: '12px', justifyContent: 'center' }}
+          >
+            New Chat
+          </button>
+          
+          {sessions.length > 0 && (
+            <div style={{ marginBottom: '20px' }}>
+              <strong style={{ fontSize: '14px', color: 'var(--muted)' }}>Chat History</strong>
+              {sessions.map((session) => (
+                <button
+                  key={session.id}
+                  onClick={() => loadSession(session.id)}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '8px',
+                    marginTop: '6px',
+                    borderColor: currentSessionId === session.id ? 'var(--primary)' : 'var(--border)',
+                    color: 'var(--text)',
+                    fontSize: '13px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {session.title}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <hr style={{ margin: '12px 0', borderColor: 'var(--border)' }} />
+
+          {Object.keys(panelContent).map((item) => (
+            <button
+              key={item}
+              onClick={() => openModal(item)}
+              aria-pressed={panel === item}
+              style={panel === item ? { borderColor: 'var(--primary)', color: 'var(--text)' } : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </aside>
+
+        <div className="chat-area">
+          <div className="panel-card">
+            <strong>{panel}</strong>
+            <p className="action-sub" style={{ marginTop: 6 }}>{panelContent[panel]}</p>
+          </div>
+
+          <div className="chat-window">
+            {messages.length === 0 ? (
+              <div className="quick-actions">
+                {quickActions.map((qa) => (
+                  <button
+                    className="action-tile"
+                    key={qa.title}
+                    onClick={() => send(qa.prompt)}
+                    style={{ textAlign: 'left' }}
+                    disabled={sending}
+                  >
+                    <p className="action-title">{qa.title}</p>
+                    <p className="action-sub">{qa.desc}</p>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="messages">
+                {loading && <div style={{ textAlign: 'center', padding: '20px', color: 'var(--muted)' }}>Loading chat history...</div>}
+                {messages.map((m, idx) => (
+                  <div className={`msg ${m.from === 'user' ? 'user' : ''}`} key={`${m.from}-${idx}`}>
+                    <div className="bubble">{m.text}</div>
+                  </div>
+                ))}
+                {sending && (
+                  <div className="msg">
+                    <div className="bubble" style={{ fontStyle: 'italic', color: 'var(--muted)' }}>
+                      AI is thinking...
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <form className="composer" onSubmit={onSubmit}>
+              <input
+                placeholder="How can I assist with your teaching today?"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                aria-label="Message input"
+                disabled={sending}
+              />
+              <button aria-label="Send" type="submit" disabled={!draft.trim() || sending}>
+                {sending ? 'Sending...' : 'Send'}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={`${modal} window`}>
+          <div className="modal">
+            <div className="modal-header">
+              <h3 className="modal-title">{modal}</h3>
+              <button className="modal-close" onClick={() => setModal(null)} aria-label="Close">Close</button>
+            </div>
+
+            {modal === 'Calendar' ? (
+              <div>
+                <div className="event-form">
+                  <input
+                    type="date"
+                    value={eventDraft.date}
+                    onChange={(e) => setEventDraft((p) => ({ ...p, date: e.target.value }))}
+                    aria-label="Event date"
+                  />
+                  <input
+                    placeholder="Event title"
+                    value={eventDraft.title}
+                    onChange={(e) => setEventDraft((p) => ({ ...p, title: e.target.value }))}
+                    aria-label="Event title"
+                  />
+                  <button className="btn primary" type="button" onClick={addEvent}>Add Event</button>
+                </div>
+                <div className="calendar-grid" aria-label="Calendar grid">
+                  {[...Array(28)].map((_, idx) => {
+                    const day = idx + 1;
+                    const date = `2025-01-${day.toString().padStart(2, '0')}`;
+                    const dayEvents = events.filter((e) => e.date === date);
+                    return (
+                      <div className={`calendar-cell${day === 5 ? ' today' : ''}`} key={date}>
+                        <div style={{ fontWeight: 700 }}>{day}</div>
+                        {dayEvents.map((ev, i) => (
+                          <div key={i} className="event-item" style={{ marginTop: 6 }}>
+                            {ev.title}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="action-sub" style={{ marginBottom: 12 }}>{panelContent[modal]}</p>
+                <div className="event-item">This is a placeholder workspace for {modal}. Add more tools here later.</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      <ToastStack toasts={toasts} onClose={remove} />
+    </section>
+  );
+};
+
+export default ChatPage;
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    send(draft);
+  };
+
+  const openModal = (name: string) => {
+    setPanel(name);
+    setModal(name);
+  };
+
+  const addEvent = () => {
+    if (!eventDraft.date || !eventDraft.title.trim()) return;
+    setEvents((prev) => [...prev, { ...eventDraft }]);
+    setEventDraft({ date: '', title: '' });
+  };
+
+  return (
+    <section className="section chat-page" style={{ maxWidth: '100%' }}>
+      <div className="chat-layout">
+        <aside className="sidebar">
+          {Object.keys(panelContent).map((item) => (
+            <button
+              key={item}
+              onClick={() => openModal(item)}
+              aria-pressed={panel === item}
+              style={panel === item ? { borderColor: 'var(--primary)', color: 'var(--text)' } : undefined}
+            >
+              {item}
+            </button>
+          ))}
+        </aside>
+
+        <div className="chat-area">
+          <div className="panel-card">
+            <strong>{panel}</strong>
+            <p className="action-sub" style={{ marginTop: 6 }}>{panelContent[panel]}</p>
+          </div>
+
+          <div className="chat-window">
+            <div className="quick-actions">
+              {quickActions.map((qa) => (
+                <button
+                  className="action-tile"
+                  key={qa.title}
+                  onClick={() => send(qa.prompt)}
+                  style={{ textAlign: 'left' }}
+                >
+                  <p className="action-title">{qa.title}</p>
+                  <p className="action-sub">{qa.desc}</p>
+                </button>
+              ))}
+            </div>
+
+            <div className="messages">
+              {messages.map((m, idx) => (
+                <div className={`msg ${m.from === 'user' ? 'user' : ''}`} key={`${m.from}-${idx}`}>
+                  <div className="bubble">{m.text}</div>
+                </div>
+              ))}
+            </div>
+
+            <form className="composer" onSubmit={onSubmit}>
+              <input
+                placeholder="How can I assist with your teaching today?"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                aria-label="Message input"
+              />
+              <button aria-label="Send" type="submit" disabled={!draft.trim()}>Send</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {modal && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label={`${modal} window`}>
+          <div className="modal">
+            <div className="modal-header">
+              <h3 className="modal-title">{modal}</h3>
+              <button className="modal-close" onClick={() => setModal(null)} aria-label="Close">Close</button>
+            </div>
+
+            {modal === 'Calendar' ? (
+              <div>
+                <div className="event-form">
+                  <input
+                    type="date"
+                    value={eventDraft.date}
+                    onChange={(e) => setEventDraft((p) => ({ ...p, date: e.target.value }))}
+                    aria-label="Event date"
+                  />
+                  <input
+                    placeholder="Event title"
+                    value={eventDraft.title}
+                    onChange={(e) => setEventDraft((p) => ({ ...p, title: e.target.value }))}
+                    aria-label="Event title"
+                  />
+                  <button className="btn primary" type="button" onClick={addEvent}>Add Event</button>
+                </div>
+                <div className="calendar-grid" aria-label="Calendar grid">
+                  {[...Array(28)].map((_, idx) => {
+                    const day = idx + 1;
+                    const date = `2025-01-${day.toString().padStart(2, '0')}`;
+                    const dayEvents = events.filter((e) => e.date === date);
+                    return (
+                      <div className={`calendar-cell${day === 5 ? ' today' : ''}`} key={date}>
+                        <div style={{ fontWeight: 700 }}>{day}</div>
+                        {dayEvents.map((ev, i) => (
+                          <div key={i} className="event-item" style={{ marginTop: 6 }}>
+                            {ev.title}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <p className="action-sub" style={{ marginBottom: 12 }}>{panelContent[modal]}</p>
+                <div className="event-item">This is a placeholder workspace for {modal}. Add more tools here later.</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
+export default ChatPage;
